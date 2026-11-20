@@ -40,6 +40,24 @@ public final class TestApi {
         return mvc.perform(get(url));
     }
 
+    /** POST with a fresh random Idempotency-Key (for money endpoints). */
+    public ResultActions postMoney(String url, String json) throws Exception {
+        return postMoney(url, json, newKey());
+    }
+
+    /** POST with the given Idempotency-Key; {@code null} sends no header at all. */
+    public ResultActions postMoney(String url, String json, String idempotencyKey) throws Exception {
+        MockHttpServletRequestBuilder request = post(url).contentType(MediaType.APPLICATION_JSON).content(json);
+        if (idempotencyKey != null) {
+            request.header("Idempotency-Key", idempotencyKey);
+        }
+        return mvc.perform(request);
+    }
+
+    public static String newKey() {
+        return UUID.randomUUID().toString();
+    }
+
     // ---- users & accounts ------------------------------------------------------------
 
     public long createUser() throws Exception {
@@ -71,14 +89,23 @@ public final class TestApi {
     // ---- money -----------------------------------------------------------------------
 
     public ResultActions deposit(long accountId, long amountPaise) throws Exception {
-        return postJson("/api/deposits", """
-                {"accountId": %d, "amountPaise": %d}""".formatted(accountId, amountPaise));
+        return deposit(newKey(), accountId, amountPaise);
+    }
+
+    public ResultActions deposit(String idempotencyKey, long accountId, long amountPaise) throws Exception {
+        return postMoney("/api/deposits", """
+                {"accountId": %d, "amountPaise": %d}""".formatted(accountId, amountPaise), idempotencyKey);
     }
 
     public ResultActions transfer(long fromAccountId, long toAccountId, long amountPaise) throws Exception {
-        return postJson("/api/transfers", """
+        return transfer(newKey(), fromAccountId, toAccountId, amountPaise);
+    }
+
+    public ResultActions transfer(String idempotencyKey, long fromAccountId, long toAccountId, long amountPaise)
+            throws Exception {
+        return postMoney("/api/transfers", """
                 {"fromAccountId": %d, "toAccountId": %d, "amountPaise": %d}"""
-                .formatted(fromAccountId, toAccountId, amountPaise));
+                .formatted(fromAccountId, toAccountId, amountPaise), idempotencyKey);
     }
 
     public long balance(long accountId) throws Exception {

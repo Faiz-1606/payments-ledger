@@ -120,7 +120,7 @@ class TransferApiTest extends AbstractIntegrationTest {
     void fractionalAmountIsRejectedNotTruncated() throws Exception {
         long alice = api.newAccountWithBalance(500);
         long bob = api.newAccountWithBalance(0);
-        api.postJson("/api/transfers", """
+        api.postMoney("/api/transfers", """
                         {"fromAccountId": %d, "toAccountId": %d, "amountPaise": 10.5}""".formatted(alice, bob))
                 .andExpect(status().isBadRequest());
         assertThat(api.balance(alice)).isEqualTo(500);
@@ -137,7 +137,7 @@ class TransferApiTest extends AbstractIntegrationTest {
 
     @Test
     void missingFieldIsValidationError() throws Exception {
-        api.postJson("/api/transfers", """
+        api.postMoney("/api/transfers", """
                         {"fromAccountId": 1, "amountPaise": 100}""")
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.errors[0].field").value("toAccountId"));
@@ -145,7 +145,7 @@ class TransferApiTest extends AbstractIntegrationTest {
 
     @Test
     void malformedJsonIsProblemDetail() throws Exception {
-        api.postJson("/api/transfers", "{not json")
+        api.postMoney("/api/transfers", "{not json")
                 .andExpect(status().isBadRequest())
                 .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON));
     }

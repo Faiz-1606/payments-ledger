@@ -13,15 +13,20 @@ import com.example.ledger.account.AccountKind;
 import com.example.ledger.account.AccountRepository;
 import com.example.ledger.account.SystemAccounts;
 import com.example.ledger.common.error.NotFoundException;
+import com.example.ledger.idempotency.IdempotencyService;
+import com.example.ledger.idempotency.IdempotencyService.IdempotentResult;
+import com.example.ledger.idempotency.RequestHasher;
 import com.example.ledger.ledger.LedgerWriter;
 
 /**
  * Moves money. One call = one database transaction that, atomically:
  * <ol>
+ *   <li>claims the Idempotency-Key (or replays the stored response),</li>
  *   <li>locks both accounts,</li>
  *   <li>debits one and credits the other,</li>
  *   <li>inserts the transfer row,</li>
- *   <li>inserts the two ledger entries.</li>
+ *   <li>inserts the two ledger entries,</li>
+ *   <li>stores the response under the Idempotency-Key.</li>
  * </ol>
  * Either all four happen or none do.
  */
@@ -32,13 +37,16 @@ public class TransferService {
     private final TransferRepository transferRepository;
     private final LedgerWriter ledgerWriter;
     private final SystemAccounts systemAccounts;
+    private final IdempotencyService idempotencyService;
 
     public TransferService(AccountRepository accountRepository, TransferRepository transferRepository,
-                           LedgerWriter ledgerWriter, SystemAccounts systemAccounts) {
+                           LedgerWriter ledgerWriter, SystemAccounts systemAccounts,
+                           IdempotencyService idempotencyService) {
         this.accountRepository = accountRepository;
         this.transferRepository = transferRepository;
         this.ledgerWriter = ledgerWriter;
         this.systemAccounts = systemAccounts;
+        this.idempotencyService = idempotencyService;
     }
 
     /**
@@ -48,15 +56,16 @@ public class TransferService {
      * proxy and therefore the transaction.)
      */
     @Transactional
-    public TransferResponse transfer(long fromAccountId, long toAccountId, long amountPaise) {
-        return execute(new TransferCommand(TransferType.TRANSFER, fromAccountId, toAccountId, amountPaise));
+    public TransferOutcome transfer(String idempotencyKey, long fromAccountId, long toAccountId, long amountPaise) {
+        return executeOnce(idempotencyKey,
+                new TransferCommand(TransferType.TRANSFER, fromAccountId, toAccountId, amountPaise));
     }
 
     /** A deposit is a transfer out of the system funding account. */
     @Transactional
-    public TransferResponse deposit(long toAccountId, long amountPaise) {
-        return execute(new TransferCommand(TransferType.DEPOSIT, systemAccounts.fundingAccountId(),
-                toAccountId, amountPaise));
+    public TransferOutcome deposit(String idempotencyKey, long toAccountId, long amountPaise) {
+        return executeOnce(idempotencyKey, new TransferCommand(TransferType.DEPOSIT,
+                systemAccounts.fundingAccountId(), toAccountId, amountPaise));
     }
 
     @Transactional(readOnly = true)
@@ -72,7 +81,22 @@ public class TransferService {
         return transferRepository.findById(transferId).orElseThrow(() -> NotFoundException.transfer(transferId));
     }
 
-    private TransferResponse execute(TransferCommand command) {
+    /** Wraps {@link #execute} so it runs at most once per Idempotency-Key. */
+    private TransferOutcome executeOnce(String idempotencyKey, TransferCommand command) {
+        String requestHash = RequestHasher.sha256Hex(canonicalForm(command));
+        IdempotentResult<TransferResponse> result = idempotencyService.execute(
+                idempotencyKey, requestHash, TransferResponse.class, TransferResponse::id,
+                () -> execute(command, idempotencyKey));
+        return new TransferOutcome(result.response(), result.replayed());
+    }
+
+    /** Field order is fixed, so equal requests always produce an equal string (and hash). */
+    static String canonicalForm(TransferCommand command) {
+        return command.type() + "|from=" + command.fromAccountId() + "|to=" + command.toAccountId()
+                + "|amount=" + command.amountPaise();
+    }
+
+    private TransferResponse execute(TransferCommand command, String idempotencyKey) {
         if (command.fromAccountId() == command.toAccountId()) {
             throw InvalidTransferException.sameAccount(command.fromAccountId());
         }
@@ -94,7 +118,7 @@ public class TransferService {
         to.credit(command.amountPaise());
 
         Instant now = Instant.now().truncatedTo(ChronoUnit.MICROS);
-        Transfer transfer = transferRepository.save(new Transfer(null, command.type(),
+        Transfer transfer = transferRepository.save(new Transfer(idempotencyKey, command.type(),
                 from.getId(), to.getId(), command.amountPaise(), now));
         ledgerWriter.recordDoubleEntry(transfer.getId(), from.getId(), to.getId(), command.amountPaise(), now);
         return TransferResponse.from(transfer);
