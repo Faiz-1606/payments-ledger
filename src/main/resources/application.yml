@@ -40,6 +40,17 @@ spring:
       # RFC 7807 application/problem+json, same as our custom errors.
       enabled: true
 
+ledger:
+  # Concurrency-control strategy for transfers and deposits: naive | pessimistic | optimistic.
+  # naive is deliberately broken (lost updates) and exists only for demos and load tests.
+  locking: pessimistic
+  optimistic:
+    # Total attempts of the whole transaction on version conflicts, with "full jitter"
+    # exponential backoff between attempts: random(0, min(max-backoff, base-backoff * 2^n)).
+    max-attempts: 10
+    base-backoff: 5ms
+    max-backoff: 100ms
+
 springdoc:
   swagger-ui:
     path: /swagger-ui.html

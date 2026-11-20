@@ -11,6 +11,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.context.MessageSourceResolvable;
 import org.springframework.context.i18n.LocaleContextHolder;
 import org.springframework.core.MethodParameter;
+import org.springframework.dao.ConcurrencyFailureException;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
@@ -80,6 +81,21 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
         problem.setType(problemType("DATA_CONFLICT"));
         problem.setTitle("Data conflict");
         problem.setProperty("code", "DATA_CONFLICT");
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(problem);
+    }
+
+    /**
+     * The database gave up on a lock: a deadlock victim, or a lock or serialization timeout.
+     * Nothing was committed, so the client can safely retry with the same Idempotency-Key.
+     */
+    @ExceptionHandler(ConcurrencyFailureException.class)
+    public ResponseEntity<ProblemDetail> handleConcurrencyFailure(ConcurrencyFailureException ex) {
+        log.warn("Concurrency failure: {}", ex.getMostSpecificCause().getMessage());
+        ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.CONFLICT,
+                "The request collided with a concurrent update. Retry with the same Idempotency-Key.");
+        problem.setType(problemType("CONCURRENT_UPDATE"));
+        problem.setTitle("Concurrent update");
+        problem.setProperty("code", "CONCURRENT_UPDATE");
         return ResponseEntity.status(HttpStatus.CONFLICT).body(problem);
     }
 
