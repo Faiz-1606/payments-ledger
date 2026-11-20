@@ -1,7 +1,7 @@
 // Shared helpers for the k6 scenarios. k6 runs JavaScript, but it is not Node.js:
 // each virtual user (VU) is an isolated JS runtime that loops over the default function.
 import http from 'k6/http';
-import { check, fail } from 'k6';
+import { check, fail, sleep } from 'k6';
 import { Counter, Rate } from 'k6/metrics';
 
 export const BASE_URL = __ENV.BASE_URL || 'http://localhost:8080';
@@ -96,14 +96,31 @@ export function seedAccounts(count, balancePaise) {
       { headers: auth(t), tags: { name: 'seed' } }]));
     const accountIds = opened.map((r) => { if (r.status !== 201) fail(`open account: ${r.status}`); return r.json('id'); });
 
-    const deposits = http.batch(accountIds.map((id) => ['POST', `${BASE_URL}/api/deposits`,
-      JSON.stringify({ accountId: id, amountPaise: balancePaise }),
-      { headers: Object.assign(auth(adminToken), { 'Idempotency-Key': newKey() }), tags: { name: 'seed' } }]));
-    deposits.forEach((r) => { if (r.status !== 201) fail(`deposit: ${r.status} ${r.body}`); });
+    // Deposits go one at a time. Every deposit debits the single funding account, so parallel
+    // deposits would contend on that one row (and corrupt it in naive mode, or exhaust optimistic
+    // retries: that is what happened in the archived first run). A 409 is retried with the SAME
+    // Idempotency-Key, which is exactly how a well-behaved client should retry.
+    accountIds.forEach((id) => depositWithRetry(adminToken, id, balancePaise));
 
     accountIds.forEach((id, k) => seeded.push({ accountId: id, token: tokens[k] }));
   }
   return seeded;
+}
+
+function depositWithRetry(adminToken, accountId, amountPaise) {
+  const key = newKey();
+  for (let attempt = 1; attempt <= 20; attempt++) {
+    const res = http.post(`${BASE_URL}/api/deposits`, JSON.stringify({ accountId, amountPaise }),
+      { headers: Object.assign(auth(adminToken), { 'Idempotency-Key': key }), tags: { name: 'seed' } });
+    if (res.status === 201) {
+      return;
+    }
+    if (res.status !== 409) {
+      fail(`deposit: ${res.status} ${res.body}`);
+    }
+    sleep(0.05 * attempt);
+  }
+  fail(`deposit to ${accountId} still conflicting after 20 attempts`);
 }
 
 /** Builds the request tuple for http.batch / http.request. */

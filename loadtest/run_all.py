@@ -25,8 +25,10 @@ import json
 import os
 import platform
 import re
+import statistics
 import subprocess
 import sys
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -112,6 +114,42 @@ def metric(metrics, name, field, default=0):
     return value.get(field, default)
 
 
+class CpuSampler:
+    """Samples `docker stats` for the app and postgres containers while k6 runs."""
+
+    def __init__(self):
+        self.samples = {"app": [], "postgres": []}
+        self.stop = threading.Event()
+        self.thread = threading.Thread(target=self._loop, daemon=True)
+
+    def _loop(self):
+        while not self.stop.is_set():
+            out = subprocess.run(["docker", "stats", "--no-stream", "--format", "{{.Name}}|{{.CPUPerc}}"],
+                                 capture_output=True, text=True).stdout
+            for line in out.splitlines():
+                name, _, cpu = line.partition("|")
+                for service in self.samples:
+                    if name.startswith(f"{COMPOSE_PROJECT}-{service}-"):
+                        try:
+                            self.samples[service].append(float(cpu.strip().rstrip("%")))
+                        except ValueError:
+                            pass
+            self.stop.wait(3)
+
+    def __enter__(self):
+        self.thread.start()
+        return self
+
+    def __exit__(self, *exc):
+        self.stop.set()
+        self.thread.join(timeout=30)
+
+    def mean(self, service):
+        # Drop the first sample (seeding) when there are enough; % is of ONE core (400% = 4 cores).
+        values = self.samples[service][1:] or self.samples[service]
+        return round(statistics.mean(values)) if values else None
+
+
 def duration_seconds(text):
     match = re.fullmatch(r"(\d+)(s|m)", text)
     if not match:
@@ -128,13 +166,16 @@ def run_one(mode, scenario, vus, duration):
     before = int(psql(env, "select count(*) from transfers where type = 'TRANSFER'"))
     raw_file = RESULTS / "raw" / f"{mode}-{scenario}.json"
     raw_file.parent.mkdir(parents=True, exist_ok=True)
+    if raw_file.exists():
+        raw_file.unlink()
     started = time.time()
-    run(["docker", "run", "--rm", "--network", NETWORK,
-         "-v", f"{LOADTEST}:/scripts",
-         "-e", "BASE_URL=http://app:8080", "-e", f"ADMIN_EMAIL={ADMIN_EMAIL}",
-         "-e", f"ADMIN_PASSWORD={ADMIN_PASSWORD}", "-e", f"VUS={vus}", "-e", f"DURATION={duration}",
-         K6_IMAGE, "run", "--quiet", "--summary-export", f"/scripts/results/raw/{raw_file.name}",
-         f"/scripts/{scenario}.js"], env=env, check=False)
+    with CpuSampler() as cpu:
+        exit_code = run(["docker", "run", "--rm", "--network", NETWORK,
+                         "-v", f"{LOADTEST}:/scripts",
+                         "-e", "BASE_URL=http://app:8080", "-e", f"ADMIN_EMAIL={ADMIN_EMAIL}",
+                         "-e", f"ADMIN_PASSWORD={ADMIN_PASSWORD}", "-e", f"VUS={vus}", "-e", f"DURATION={duration}",
+                         K6_IMAGE, "run", "--quiet", "--summary-export", f"/scripts/results/raw/{raw_file.name}",
+                         f"/scripts/{scenario}.js"], env=env, check=False)
     wall = time.time() - started
     after = int(psql(env, "select count(*) from transfers where type = 'TRANSFER'"))
 
@@ -146,6 +187,8 @@ def run_one(mode, scenario, vus, duration):
 
     m = json.loads(raw_file.read_text(encoding="utf-8"))["metrics"]
     seconds = duration_seconds(duration)
+    if exit_code != 0 or metric(m, "http_req_duration{name:transfer}", "count") == 0:
+        raise SystemExit(f"k6 run for {mode}/{scenario} failed (exit {exit_code}); not recording empty numbers")
     transfer_requests = metric(m, "http_req_duration{name:transfer}", "count")
     logical_ok = metric(m, "logical_transfers_ok", "count")
     db_rows = after - before
@@ -158,6 +201,9 @@ def run_one(mode, scenario, vus, duration):
         "requests_measured": int(metric(m, "http_reqs", "count")
                                  - metric(m, "http_reqs{name:seed}", "count")
                                  - metric(m, "http_reqs{name:login}", "count")),
+        "total_requests_per_s": round((metric(m, "http_reqs", "count")
+                                       - metric(m, "http_reqs{name:seed}", "count")
+                                       - metric(m, "http_reqs{name:login}", "count")) / seconds, 1),
         "transfer_requests": int(transfer_requests),
         "transfer_requests_per_s": round(transfer_requests / seconds, 1),
         "ok_transfers_per_s": round(logical_ok / seconds, 1),
@@ -166,6 +212,9 @@ def run_one(mode, scenario, vus, duration):
         "transfer_p99_ms": round(metric(m, "http_req_duration{name:transfer}", "p(99)"), 2),
         "transfer_max_ms": round(metric(m, "http_req_duration{name:transfer}", "max"), 2),
         "read_p95_ms": round(metric(m, "http_req_duration{name:get_account}", "p(95)"), 2),
+        "read_p99_ms": round(metric(m, "http_req_duration{name:get_account}", "p(99)"), 2),
+        "app_cpu_avg_pct": cpu.mean("app"),
+        "postgres_cpu_avg_pct": cpu.mean("postgres"),
         "transfer_error_rate": round(metric(m, "transfer_errors", "value"), 4),
         "status_409": int(metric(m, "status_409", "count")),
         "status_422": int(metric(m, "status_422", "count")),
@@ -241,6 +290,19 @@ def table(results):
             f"| {r['status_5xx']} | {r['optimistic_lock_retries']} | {r['drifted_accounts']} "
             f"| {r['total_abs_drift_paise'] / 100:,.2f} | {r['ledger_total_paise']} "
             f"| {r['db_rows_minus_ok_transfers']} | {r['client_detected_duplicates']} |")
+    lines += [
+        "",
+        "| Mode | Scenario | All req/s | Balance-read p95 ms | Balance-read p99 ms | App CPU avg | PostgreSQL CPU avg |",
+        "|---|---|---|---|---|---|---|",
+    ]
+    for r in results:
+        reads = r["scenario"] == "mixed"
+        lines.append(
+            f"| {r['mode']} | {r['scenario']} | {r['total_requests_per_s']} "
+            f"| {r['read_p95_ms'] if reads else '-'} | {r['read_p99_ms'] if reads else '-'} "
+            f"| {r['app_cpu_avg_pct']}% | {r['postgres_cpu_avg_pct']}% |")
+    lines.append("")
+    lines.append("CPU % is of one core, sampled every ~3 s with `docker stats`; each container is capped at 400%.")
     return "\n".join(lines)
 
 
