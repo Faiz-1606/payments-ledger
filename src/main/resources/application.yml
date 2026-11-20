@@ -28,6 +28,26 @@ spring:
         # the same accounts then always lock rows in the same order, which avoids deadlocks.
         order_updates: true
 
+  kafka:
+    # Overridden in Docker Compose (kafka:9092). Unused in the "core" profile.
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    producer:
+      # Wait for all in-sync replicas; the idempotent producer prevents duplicates from
+      # the producer's own internal retries.
+      acks: all
+      properties:
+        enable.idempotence: true
+        # Fail fast when Kafka is down instead of blocking the publisher for a minute.
+        max.block.ms: 5000
+        request.timeout.ms: 5000
+        delivery.timeout.ms: 10000
+    consumer:
+      group-id: ledger-notifications
+      auto-offset-reset: earliest
+    listener:
+      # Commit each record's offset right after it was processed successfully.
+      ack-mode: record
+
   jackson:
     deserialization:
       # By default Jackson silently turns 10.5 into 10 for a long field. For money that is
@@ -61,6 +81,14 @@ ledger:
     # First ADMIN user, created at startup if both are set (ADMIN_EMAIL / ADMIN_PASSWORD).
     admin-email: ${ADMIN_EMAIL:}
     admin-password: ${ADMIN_PASSWORD:}
+
+  kafka:
+    # false in the "core" profile (application-core.yml): no publisher, no consumer.
+    enabled: true
+    topic: ledger.transfer-completed
+    publish-interval: PT0.5S
+    publish-batch-size: 100
+    send-timeout: 5s
 
   reconciliation:
     # Scheduled check of invariants 1-4 across all accounts (ReconciliationJob).

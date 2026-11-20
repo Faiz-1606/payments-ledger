@@ -33,7 +33,7 @@ import com.example.ledger.user.UserRepository;
 @SpringBootTest
 @AutoConfigureMockMvc
 @AutoConfigureMetrics // tests disable metrics export by default; we test /actuator/prometheus
-@ActiveProfiles("test")
+@ActiveProfiles({"core", "test"}) // no Kafka; KafkaOutboxIntegrationTest turns it on
 public abstract class AbstractIntegrationTest {
 
     protected static final PostgreSQLContainer POSTGRES =

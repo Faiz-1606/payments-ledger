@@ -27,6 +27,7 @@ import com.example.ledger.idempotency.IdempotencyService;
 import com.example.ledger.idempotency.IdempotencyService.IdempotentResult;
 import com.example.ledger.idempotency.RequestHasher;
 import com.example.ledger.ledger.LedgerWriter;
+import com.example.ledger.outbox.OutboxWriter;
 import com.example.ledger.security.AccessPolicy;
 import com.example.ledger.security.CurrentUser;
 import com.example.ledger.transfer.locking.AccountPair;
@@ -42,6 +43,7 @@ import com.example.ledger.transfer.locking.RetryBackoff;
  *   <li>loads both accounts the way the chosen {@link LockingStrategy} says,</li>
  *   <li>debits one and credits the other,</li>
  *   <li>inserts the transfer row and the two ledger entries,</li>
+ *   <li>inserts a TransferCompleted event into the outbox (published to Kafka later),</li>
  *   <li>stores the response under the Idempotency-Key.</li>
  * </ol>
  * Either all of it commits or none of it does. With optimistic locking a conflicting attempt
@@ -69,6 +71,7 @@ public class TransferService {
     private final AccountRepository accountRepository;
     private final AccessPolicy accessPolicy;
     private final LedgerWriter ledgerWriter;
+    private final OutboxWriter outboxWriter;
     private final SystemAccounts systemAccounts;
     private final IdempotencyService idempotencyService;
     private final LockingStrategies lockingStrategies;
@@ -77,7 +80,7 @@ public class TransferService {
     private final TransactionTemplate transactionTemplate;
 
     public TransferService(TransferRepository transferRepository, AccountRepository accountRepository,
-                           AccessPolicy accessPolicy, LedgerWriter ledgerWriter,
+                           AccessPolicy accessPolicy, LedgerWriter ledgerWriter, OutboxWriter outboxWriter,
                            SystemAccounts systemAccounts, IdempotencyService idempotencyService,
                            LockingStrategies lockingStrategies, RetryBackoff retryBackoff,
                            TransferMetrics metrics, PlatformTransactionManager transactionManager) {
@@ -85,6 +88,7 @@ public class TransferService {
         this.accountRepository = accountRepository;
         this.accessPolicy = accessPolicy;
         this.ledgerWriter = ledgerWriter;
+        this.outboxWriter = outboxWriter;
         this.systemAccounts = systemAccounts;
         this.idempotencyService = idempotencyService;
         this.lockingStrategies = lockingStrategies;
@@ -196,6 +200,9 @@ public class TransferService {
                 command.fromAccountId(), command.toAccountId(), command.amountPaise(), now));
         ledgerWriter.recordDoubleEntry(transfer.getId(), command.fromAccountId(), command.toAccountId(),
                 command.amountPaise(), now);
+        // Same transaction: the event exists if and only if the transfer committed.
+        outboxWriter.transferCompleted(transfer.getId(), command.type().name(), command.fromAccountId(),
+                command.toAccountId(), command.amountPaise(), now);
         log.debug("Transfer {} {}: {} -> {} ({} paise)", transfer.getId(), command.type(),
                 command.fromAccountId(), command.toAccountId(), command.amountPaise());
         return TransferResponse.from(transfer);

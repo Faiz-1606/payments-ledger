@@ -1,0 +1,13 @@
+# The "core" profile: the ledger without Kafka.
+#
+# Transfers still write TransferCompleted rows to the outbox table in the same transaction
+# (that never depends on Kafka), but nothing publishes them and no consumer runs. Turning
+# Kafka on later would publish the backlog.
+ledger:
+  kafka:
+    enabled: false
+
+spring:
+  autoconfigure:
+    # Don't even create Kafka clients: nothing will try to connect to a broker.
+    exclude: org.springframework.boot.kafka.autoconfigure.KafkaAutoConfiguration
