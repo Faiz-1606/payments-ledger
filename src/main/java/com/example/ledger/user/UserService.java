@@ -1,6 +1,7 @@
 package com.example.ledger.user;
 
 import java.util.Locale;
+import java.util.Optional;
 
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
@@ -23,15 +24,17 @@ public class UserService {
      * a check-then-act race: two requests can both pass it. The UNIQUE constraint on
      * users.email is what really guarantees uniqueness; we translate its violation into the
      * same 409. {@code saveAndFlush} forces the INSERT now so the violation surfaces here.
+     *
+     * @param passwordHash an already-hashed password (hashing is the security layer's job)
      */
     @Transactional
-    public User createUser(String fullName, String email) {
-        String normalizedEmail = email.trim().toLowerCase(Locale.ROOT);
+    public User createUser(String fullName, String email, String passwordHash, Role role) {
+        String normalizedEmail = normalizeEmail(email);
         if (userRepository.existsByEmailIgnoreCase(normalizedEmail)) {
             throw new EmailAlreadyRegisteredException(normalizedEmail);
         }
         try {
-            return userRepository.saveAndFlush(new User(fullName.trim(), normalizedEmail));
+            return userRepository.saveAndFlush(new User(fullName.trim(), normalizedEmail, passwordHash, role));
         } catch (DataIntegrityViolationException raceLost) {
             throw new EmailAlreadyRegisteredException(normalizedEmail);
         }
@@ -40,5 +43,14 @@ public class UserService {
     @Transactional(readOnly = true)
     public User getUser(long userId) {
         return userRepository.findById(userId).orElseThrow(() -> NotFoundException.user(userId));
+    }
+
+    @Transactional(readOnly = true)
+    public Optional<User> findByEmail(String email) {
+        return userRepository.findByEmailIgnoreCase(normalizeEmail(email));
+    }
+
+    static String normalizeEmail(String email) {
+        return email.trim().toLowerCase(Locale.ROOT);
     }
 }

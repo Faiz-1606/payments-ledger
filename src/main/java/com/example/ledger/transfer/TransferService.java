@@ -2,6 +2,7 @@ package com.example.ledger.transfer;
 
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
+import java.util.List;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -17,12 +18,16 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 import com.example.ledger.account.Account;
 import com.example.ledger.account.AccountKind;
+import com.example.ledger.account.AccountRepository;
 import com.example.ledger.account.SystemAccounts;
+import com.example.ledger.common.error.ForbiddenException;
 import com.example.ledger.common.error.NotFoundException;
 import com.example.ledger.idempotency.IdempotencyService;
 import com.example.ledger.idempotency.IdempotencyService.IdempotentResult;
 import com.example.ledger.idempotency.RequestHasher;
 import com.example.ledger.ledger.LedgerWriter;
+import com.example.ledger.security.AccessPolicy;
+import com.example.ledger.security.CurrentUser;
 import com.example.ledger.transfer.locking.AccountPair;
 import com.example.ledger.transfer.locking.LockingMode;
 import com.example.ledger.transfer.locking.LockingStrategies;
@@ -60,6 +65,8 @@ public class TransferService {
     private static final Logger log = LoggerFactory.getLogger(TransferService.class);
 
     private final TransferRepository transferRepository;
+    private final AccountRepository accountRepository;
+    private final AccessPolicy accessPolicy;
     private final LedgerWriter ledgerWriter;
     private final SystemAccounts systemAccounts;
     private final IdempotencyService idempotencyService;
@@ -67,11 +74,14 @@ public class TransferService {
     private final RetryBackoff retryBackoff;
     private final TransactionTemplate transactionTemplate;
 
-    public TransferService(TransferRepository transferRepository, LedgerWriter ledgerWriter,
+    public TransferService(TransferRepository transferRepository, AccountRepository accountRepository,
+                           AccessPolicy accessPolicy, LedgerWriter ledgerWriter,
                            SystemAccounts systemAccounts, IdempotencyService idempotencyService,
                            LockingStrategies lockingStrategies, RetryBackoff retryBackoff,
                            PlatformTransactionManager transactionManager) {
         this.transferRepository = transferRepository;
+        this.accountRepository = accountRepository;
+        this.accessPolicy = accessPolicy;
         this.ledgerWriter = ledgerWriter;
         this.systemAccounts = systemAccounts;
         this.idempotencyService = idempotencyService;
@@ -82,24 +92,37 @@ public class TransferService {
         this.transactionTemplate.setIsolationLevel(TransactionDefinition.ISOLATION_READ_COMMITTED);
     }
 
-    public TransferOutcome transfer(String idempotencyKey, long fromAccountId, long toAccountId, long amountPaise) {
-        return execute(idempotencyKey,
+    /**
+     * A user-initiated transfer. The caller must own the source account. Ownership never
+     * changes after an account is opened, so checking it before the transaction is safe.
+     */
+    public TransferOutcome transfer(CurrentUser caller, String idempotencyKey,
+                                    long fromAccountId, long toAccountId, long amountPaise) {
+        Account source = accountRepository.findById(fromAccountId)
+                .orElseThrow(() -> NotFoundException.account(fromAccountId));
+        accessPolicy.requireCanDebit(caller, source);
+        return execute(caller.userId(), idempotencyKey,
                 new TransferCommand(TransferType.TRANSFER, fromAccountId, toAccountId, amountPaise),
                 lockingStrategies.defaultMode());
     }
 
-    /** A deposit is a transfer out of the system funding account. */
-    public TransferOutcome deposit(String idempotencyKey, long toAccountId, long amountPaise) {
-        return execute(idempotencyKey,
+    /** A deposit is a transfer out of the system funding account. ADMIN only (SecurityConfig). */
+    public TransferOutcome deposit(CurrentUser caller, String idempotencyKey, long toAccountId, long amountPaise) {
+        return execute(caller.userId(), idempotencyKey,
                 new TransferCommand(TransferType.DEPOSIT, systemAccounts.fundingAccountId(), toAccountId, amountPaise),
                 lockingStrategies.defaultMode());
     }
 
     /**
-     * Runs a money movement with an explicit locking strategy (the API uses the configured
-     * default; tests and the race demo choose one).
+     * Runs a money movement with an explicit locking strategy and no end-user caller: used by
+     * trusted internal code (the race demo) and tests. No ownership check happens here.
      */
     public TransferOutcome execute(String idempotencyKey, TransferCommand command, LockingMode mode) {
+        return execute(null, idempotencyKey, command, mode);
+    }
+
+    private TransferOutcome execute(Long initiatedBy, String idempotencyKey, TransferCommand command,
+                                    LockingMode mode) {
         if (TransactionSynchronizationManager.isActualTransactionActive()) {
             // Retrying inside someone else's transaction cannot work: after the first failure
             // that outer transaction is already marked rollback-only.
@@ -109,7 +132,10 @@ public class TransferService {
             throw InvalidTransferException.sameAccount(command.fromAccountId());
         }
         LockingStrategy strategy = lockingStrategies.get(mode);
-        String requestHash = RequestHasher.sha256Hex(canonicalForm(command));
+        // The caller is part of the fingerprint: another user reusing the same key gets a 422,
+        // never this user's stored response.
+        String requestHash = RequestHasher.sha256Hex(canonicalForm(command) + "|by="
+                + (initiatedBy == null ? "system" : initiatedBy));
 
         for (int attempt = 1; ; attempt++) {
             final int thisAttempt = attempt;
@@ -155,17 +181,45 @@ public class TransferService {
         return TransferResponse.from(transfer);
     }
 
+    /**
+     * With {@code accountId}: transfers touching that account (caller must be allowed to view it).
+     * Without: everything for an ADMIN, otherwise transfers touching any of the caller's accounts.
+     */
     @Transactional(readOnly = true)
-    public Page<Transfer> listTransfers(Long accountId, Pageable pageable) {
-        if (accountId == null) {
+    public Page<Transfer> listTransfers(CurrentUser caller, Long accountId, Pageable pageable) {
+        if (accountId != null) {
+            Account account = accountRepository.findById(accountId)
+                    .orElseThrow(() -> NotFoundException.account(accountId));
+            accessPolicy.requireCanView(caller, account);
+            return transferRepository.findInvolvingAccount(accountId, pageable);
+        }
+        if (caller.admin()) {
             return transferRepository.findAllByOrderByIdDesc(pageable);
         }
-        return transferRepository.findInvolvingAccount(accountId, pageable);
+        List<Long> ownAccountIds = accountRepository.findByOwnerIdOrderByIdAsc(caller.userId()).stream()
+                .map(Account::getId)
+                .toList();
+        if (ownAccountIds.isEmpty()) {
+            return Page.empty(pageable);
+        }
+        return transferRepository.findInvolvingAnyAccount(ownAccountIds, pageable);
     }
 
+    /** Visible to an ADMIN, or to the owner of either side of the transfer. */
     @Transactional(readOnly = true)
-    public Transfer getTransfer(long transferId) {
-        return transferRepository.findById(transferId).orElseThrow(() -> NotFoundException.transfer(transferId));
+    public Transfer getTransfer(CurrentUser caller, long transferId) {
+        Transfer transfer = transferRepository.findById(transferId)
+                .orElseThrow(() -> NotFoundException.transfer(transferId));
+        if (caller.admin()) {
+            return transfer;
+        }
+        boolean involved = accountRepository.findAllById(List.of(transfer.getFromAccountId(), transfer.getToAccountId()))
+                .stream()
+                .anyMatch(account -> accessPolicy.isOwner(caller, account));
+        if (!involved) {
+            throw new ForbiddenException("Transfer " + transferId + " does not involve your accounts");
+        }
+        return transfer;
     }
 
     private static void checkEligibility(TransferCommand command, Account from, Account to) {

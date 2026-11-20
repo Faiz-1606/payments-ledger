@@ -120,7 +120,7 @@ class TransferApiTest extends AbstractIntegrationTest {
     void fractionalAmountIsRejectedNotTruncated() throws Exception {
         long alice = api.newAccountWithBalance(500);
         long bob = api.newAccountWithBalance(0);
-        api.postMoney("/api/transfers", """
+        api.postTransferJson(alice, """
                         {"fromAccountId": %d, "toAccountId": %d, "amountPaise": 10.5}""".formatted(alice, bob))
                 .andExpect(status().isBadRequest());
         assertThat(api.balance(alice)).isEqualTo(500);
@@ -137,7 +137,7 @@ class TransferApiTest extends AbstractIntegrationTest {
 
     @Test
     void missingFieldIsValidationError() throws Exception {
-        api.postMoney("/api/transfers", """
+        api.postMoney(api.adminToken(), "/api/transfers", """
                         {"fromAccountId": 1, "amountPaise": 100}""")
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.errors[0].field").value("toAccountId"));
@@ -145,7 +145,7 @@ class TransferApiTest extends AbstractIntegrationTest {
 
     @Test
     void malformedJsonIsProblemDetail() throws Exception {
-        api.postMoney("/api/transfers", "{not json")
+        api.postMoney(api.adminToken(), "/api/transfers", "{not json")
                 .andExpect(status().isBadRequest())
                 .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON));
     }
@@ -155,9 +155,13 @@ class TransferApiTest extends AbstractIntegrationTest {
         long funding = jdbc.queryForObject("select id from accounts where kind = 'FUNDING'", Long.class);
         long alice = api.newAccountWithBalance(500);
 
+        // Nobody owns the funding account, so no user may debit it (not even an admin).
         api.transfer(funding, alice, 100)
-                .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.code").value("ACCOUNT_NOT_ELIGIBLE"));
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value("FORBIDDEN"));
+        api.transferAs(api.adminToken(), TestApi.newKey(), funding, alice, 100)
+                .andExpect(status().isForbidden());
+        // Alice may debit her own wallet, but the funding account cannot receive money.
         api.transfer(alice, funding, 100)
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value("ACCOUNT_NOT_ELIGIBLE"));

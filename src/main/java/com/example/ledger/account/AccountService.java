@@ -8,6 +8,8 @@ import org.springframework.transaction.annotation.Transactional;
 import com.example.ledger.common.error.NotFoundException;
 import com.example.ledger.ledger.LedgerEntry;
 import com.example.ledger.ledger.LedgerEntryRepository;
+import com.example.ledger.security.AccessPolicy;
+import com.example.ledger.security.CurrentUser;
 import com.example.ledger.user.UserRepository;
 
 @Service
@@ -16,13 +18,16 @@ public class AccountService {
     private final AccountRepository accountRepository;
     private final LedgerEntryRepository ledgerEntryRepository;
     private final UserRepository userRepository;
+    private final AccessPolicy accessPolicy;
 
     public AccountService(AccountRepository accountRepository,
                           LedgerEntryRepository ledgerEntryRepository,
-                          UserRepository userRepository) {
+                          UserRepository userRepository,
+                          AccessPolicy accessPolicy) {
         this.accountRepository = accountRepository;
         this.ledgerEntryRepository = ledgerEntryRepository;
         this.userRepository = userRepository;
+        this.accessPolicy = accessPolicy;
     }
 
     @Transactional
@@ -39,8 +44,9 @@ public class AccountService {
      * the same transaction, so they see one consistent connection.
      */
     @Transactional(readOnly = true)
-    public AccountDetails getAccountDetails(long accountId) {
+    public AccountDetails getAccountDetails(CurrentUser caller, long accountId) {
         Account account = getAccount(accountId);
+        accessPolicy.requireCanView(caller, account);
         List<LedgerEntry> recent = ledgerEntryRepository.findTop20ByAccountIdOrderByIdDesc(accountId);
         return new AccountDetails(account, recent);
     }

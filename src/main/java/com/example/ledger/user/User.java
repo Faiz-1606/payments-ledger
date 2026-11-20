@@ -5,6 +5,8 @@ import java.time.temporal.ChronoUnit;
 
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
+import jakarta.persistence.EnumType;
+import jakarta.persistence.Enumerated;
 import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
@@ -33,6 +35,14 @@ public class User {
     @Column(name = "email", nullable = false, length = 255)
     private String email;
 
+    /** BCrypt hash, never the password itself. */
+    @Column(name = "password_hash", length = 100)
+    private String passwordHash;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "role", nullable = false, length = 16)
+    private Role role;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
 
@@ -40,9 +50,11 @@ public class User {
         // for JPA
     }
 
-    public User(String fullName, String email) {
+    public User(String fullName, String email, String passwordHash, Role role) {
         this.fullName = fullName;
         this.email = email;
+        this.passwordHash = passwordHash;
+        this.role = role;
         // PostgreSQL stores microseconds; truncating keeps the in-memory value identical
         // to what a later SELECT returns.
         this.createdAt = Instant.now().truncatedTo(ChronoUnit.MICROS);
@@ -58,6 +70,14 @@ public class User {
 
     public String getEmail() {
         return email;
+    }
+
+    public String getPasswordHash() {
+        return passwordHash;
+    }
+
+    public Role getRole() {
+        return role;
     }
 
     public Instant getCreatedAt() {

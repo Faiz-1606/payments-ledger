@@ -51,6 +51,17 @@ ledger:
     base-backoff: 5ms
     max-backoff: 100ms
 
+  security:
+    # HMAC-SHA256 key for signing JWTs, at least 32 bytes. The default is for local
+    # development only; production MUST set the JWT_SECRET environment variable.
+    jwt-secret: ${JWT_SECRET:local-dev-only-secret-change-me-0123456789abcdef}
+    token-ttl: 1h
+    issuer: payments-ledger
+    bcrypt-strength: 10
+    # First ADMIN user, created at startup if both are set (ADMIN_EMAIL / ADMIN_PASSWORD).
+    admin-email: ${ADMIN_EMAIL:}
+    admin-password: ${ADMIN_PASSWORD:}
+
 springdoc:
   swagger-ui:
     path: /swagger-ui.html

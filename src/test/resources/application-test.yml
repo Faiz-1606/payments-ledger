@@ -1,5 +1,13 @@
 # Settings for the "test" profile, layered on top of src/main/resources/application.yml.
 # The datasource URL is supplied at runtime by AbstractIntegrationTest (Testcontainers).
+ledger:
+  security:
+    jwt-secret: test-secret-for-integration-tests-only-0123456789
+    # BCrypt cost 4 instead of 10: about 60x faster, and tests create hundreds of users.
+    bcrypt-strength: 4
+    admin-email: admin@ledger.test
+    admin-password: admin-password-for-tests
+
 logging:
   level:
     root: WARN

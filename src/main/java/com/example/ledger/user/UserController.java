@@ -1,20 +1,18 @@
 package com.example.ledger.user;
 
-import java.net.URI;
 import java.time.Instant;
 
-import jakarta.validation.Valid;
-import jakarta.validation.constraints.Email;
-import jakarta.validation.constraints.NotBlank;
-import jakarta.validation.constraints.Size;
-import org.springframework.http.ResponseEntity;
+import jakarta.validation.constraints.Positive;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
+import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
-import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import com.example.ledger.security.CurrentUser;
+
+/** Users are created through {@code POST /api/auth/register}; this controller only reads them. */
 @RestController
 @RequestMapping("/api/users")
 public class UserController {
@@ -25,26 +23,25 @@ public class UserController {
         this.userService = userService;
     }
 
-    /** {@code @Valid} runs Bean Validation on the body; failures become a 400 ProblemDetail. */
-    @PostMapping
-    public ResponseEntity<UserResponse> createUser(@Valid @RequestBody CreateUserRequest request) {
-        User user = userService.createUser(request.fullName(), request.email());
-        return ResponseEntity.created(URI.create("/api/users/" + user.getId())).body(UserResponse.from(user));
+    /**
+     * {@code @AuthenticationPrincipal} injects the principal of the current request's
+     * Authentication. For a JWT-authenticated request that is the decoded {@link Jwt}.
+     */
+    @GetMapping("/me")
+    public UserResponse me(@AuthenticationPrincipal Jwt jwt) {
+        return UserResponse.from(userService.getUser(CurrentUser.from(jwt).userId()));
     }
 
+    /** ADMIN only (see SecurityConfig). */
     @GetMapping("/{userId}")
-    public UserResponse getUser(@PathVariable long userId) {
+    public UserResponse getUser(@PathVariable @Positive long userId) {
         return UserResponse.from(userService.getUser(userId));
     }
 
-    public record CreateUserRequest(
-            @NotBlank @Size(max = 100) String fullName,
-            @NotBlank @Email @Size(max = 255) String email) {
-    }
-
-    public record UserResponse(Long id, String fullName, String email, Instant createdAt) {
-        static UserResponse from(User user) {
-            return new UserResponse(user.getId(), user.getFullName(), user.getEmail(), user.getCreatedAt());
+    public record UserResponse(Long id, String fullName, String email, Role role, Instant createdAt) {
+        public static UserResponse from(User user) {
+            return new UserResponse(user.getId(), user.getFullName(), user.getEmail(), user.getRole(),
+                    user.getCreatedAt());
         }
     }
 }

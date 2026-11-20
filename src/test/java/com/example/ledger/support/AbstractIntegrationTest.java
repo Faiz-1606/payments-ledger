@@ -12,6 +12,11 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.utility.DockerImageName;
 
+import com.example.ledger.security.AdminBootstrap;
+import com.example.ledger.security.JwtTokenService;
+import com.example.ledger.security.SecurityProperties;
+import com.example.ledger.user.UserRepository;
+
 /**
  * Base class for integration tests: the full Spring application against a real PostgreSQL.
  *
@@ -21,7 +26,8 @@ import org.testcontainers.utility.DockerImageName;
  * shares one cached Spring context, so the app boots once, not once per class.
  *
  * <p><b>Clean slate per test.</b> {@link DatabaseCleaner} empties the tables before each test,
- * so tests are independent and global invariants can be checked after every test.
+ * then the bootstrap admin is re-created, so tests are independent and global invariants can be
+ * checked after every test.
  */
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -49,13 +55,28 @@ public abstract class AbstractIntegrationTest {
     @Autowired
     protected JdbcTemplate jdbc;
 
+    @Autowired
+    private AdminBootstrap adminBootstrap;
+
+    @Autowired
+    private JwtTokenService jwtTokenService;
+
+    @Autowired
+    private UserRepository userRepository;
+
+    @Autowired
+    private SecurityProperties securityProperties;
+
     protected TestApi api;
     protected LedgerInvariants invariants;
 
     @BeforeEach
     void resetDatabaseAndHelpers() {
         DatabaseCleaner.clean(jdbc);
-        api = new TestApi(mockMvc);
+        adminBootstrap.ensureAdminExists();
+        String adminToken = jwtTokenService.issueFor(
+                userRepository.findByEmailIgnoreCase(securityProperties.adminEmail()).orElseThrow()).accessToken();
+        api = new TestApi(mockMvc, adminToken);
         invariants = new LedgerInvariants(jdbc);
     }
 }

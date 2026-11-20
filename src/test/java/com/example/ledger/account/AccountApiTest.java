@@ -6,28 +6,27 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import org.junit.jupiter.api.Test;
 
 import com.example.ledger.support.AbstractIntegrationTest;
+import com.example.ledger.support.TestApi;
 
 class AccountApiTest extends AbstractIntegrationTest {
 
     @Test
-    void opensEmptyInrWallet() throws Exception {
-        long userId = api.createUser();
+    void opensEmptyInrWalletOwnedByTheCaller() throws Exception {
+        TestApi.TestUser user = api.registerUser();
 
-        api.postJson("/api/accounts", """
-                        {"ownerId": %d}""".formatted(userId))
+        api.postJsonAs(user.token(), "/api/accounts", "")
                 .andExpect(status().isCreated())
-                .andExpect(jsonPath("$.ownerId").value(userId))
+                .andExpect(jsonPath("$.ownerId").value(user.id()))
                 .andExpect(jsonPath("$.kind").value("USER"))
                 .andExpect(jsonPath("$.currency").value("INR"))
                 .andExpect(jsonPath("$.balancePaise").value(0));
     }
 
     @Test
-    void openingAccountForUnknownUserIsNotFound() throws Exception {
-        api.postJson("/api/accounts", """
-                        {"ownerId": 424242}""")
-                .andExpect(status().isNotFound())
-                .andExpect(jsonPath("$.code").value("USER_NOT_FOUND"));
+    void openingAccountRequiresAuthentication() throws Exception {
+        api.postJsonAnonymous("/api/accounts", "")
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value("UNAUTHORIZED"));
     }
 
     @Test
@@ -57,12 +56,16 @@ class AccountApiTest extends AbstractIntegrationTest {
     }
 
     @Test
-    void listsAccountsOfAnOwner() throws Exception {
+    void listsTheCallersOwnAccounts() throws Exception {
         long userId = api.createUser();
         api.openAccount(userId);
         api.openAccount(userId);
+        api.newAccountWithBalance(0); // someone else's
 
-        api.getJson("/api/accounts?ownerId=" + userId)
+        api.getJsonAs(api.tokenOf(userId), "/api/accounts")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(2));
+        api.getJson("/api/accounts?ownerId=" + userId) // admin
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.length()").value(2));
     }

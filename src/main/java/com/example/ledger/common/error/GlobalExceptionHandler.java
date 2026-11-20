@@ -19,6 +19,9 @@ import org.springframework.http.HttpStatusCode;
 import org.springframework.http.ProblemDetail;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
+import org.springframework.security.access.AccessDeniedException;
+import org.springframework.security.core.AuthenticationException;
+import org.springframework.security.oauth2.core.OAuth2AuthenticationException;
 import org.springframework.validation.FieldError;
 import org.springframework.validation.method.ParameterErrors;
 import org.springframework.validation.method.ParameterValidationResult;
@@ -82,6 +85,33 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
         problem.setTitle("Data conflict");
         problem.setProperty("code", "DATA_CONFLICT");
         return ResponseEntity.status(HttpStatus.CONFLICT).body(problem);
+    }
+
+    /**
+     * No token, or a token that failed validation (bad signature, expired, wrong issuer).
+     * Reached via {@code ProblemDetailsSecurityHandlers} from the security filter chain.
+     */
+    @ExceptionHandler(AuthenticationException.class)
+    public ResponseEntity<ProblemDetail> handleAuthentication(AuthenticationException ex) {
+        String detail = ex instanceof OAuth2AuthenticationException
+                ? "The access token is invalid or expired."
+                : "Authentication is required: send Authorization: Bearer <token>.";
+        ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.UNAUTHORIZED, detail);
+        problem.setType(problemType("UNAUTHORIZED"));
+        problem.setTitle("Unauthorized");
+        problem.setProperty("code", "UNAUTHORIZED");
+        return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(problem);
+    }
+
+    /** Authenticated, but the role is not enough (e.g. a USER calling an ADMIN endpoint). */
+    @ExceptionHandler(AccessDeniedException.class)
+    public ResponseEntity<ProblemDetail> handleAccessDenied(AccessDeniedException ex) {
+        ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.FORBIDDEN,
+                "You do not have permission to perform this operation.");
+        problem.setType(problemType("FORBIDDEN"));
+        problem.setTitle("Forbidden");
+        problem.setProperty("code", "FORBIDDEN");
+        return ResponseEntity.status(HttpStatus.FORBIDDEN).body(problem);
     }
 
     /**

@@ -15,6 +15,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.test.web.servlet.MvcResult;
 
+import com.example.ledger.security.CurrentUser;
 import com.example.ledger.support.AbstractIntegrationTest;
 import com.example.ledger.support.TestApi;
 import com.example.ledger.transfer.TransferOutcome;
@@ -39,7 +40,7 @@ class ConcurrentIdempotencyTest extends AbstractIntegrationTest {
         String key = TestApi.newKey();
 
         List<TransferOutcome> outcomes = runConcurrently(THREADS,
-                () -> transferService.transfer(key, alice, bob, 1_000));
+                () -> transferService.transfer(new CurrentUser(api.ownerOf(alice), false), key, alice, bob, 1_000));
 
         assertThat(outcomes).extracting(o -> o.response().id()).containsOnly(outcomes.getFirst().response().id());
         assertThat(outcomes).filteredOn(o -> !o.replayed()).hasSize(1);

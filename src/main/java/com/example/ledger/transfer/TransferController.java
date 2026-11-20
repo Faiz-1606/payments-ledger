@@ -10,6 +10,8 @@ import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Positive;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
+import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -22,6 +24,7 @@ import org.springframework.web.bind.annotation.RestController;
 import com.example.ledger.common.Money;
 import com.example.ledger.common.PageResponse;
 import com.example.ledger.idempotency.IdempotencyKeys;
+import com.example.ledger.security.CurrentUser;
 
 @RestController
 @RequestMapping("/api/transfers")
@@ -39,9 +42,10 @@ public class TransferController {
      */
     @PostMapping
     public ResponseEntity<TransferResponse> transfer(
+            @AuthenticationPrincipal Jwt jwt,
             @RequestHeader(IdempotencyKeys.HEADER) @Pattern(regexp = IdempotencyKeys.PATTERN) String idempotencyKey,
             @Valid @RequestBody TransferRequest request) {
-        TransferOutcome outcome = transferService.transfer(idempotencyKey,
+        TransferOutcome outcome = transferService.transfer(CurrentUser.from(jwt), idempotencyKey,
                 request.fromAccountId(), request.toAccountId(), request.amountPaise());
         return created(outcome);
     }
@@ -54,16 +58,18 @@ public class TransferController {
 
     @GetMapping
     public PageResponse<TransferResponse> listTransfers(
+            @AuthenticationPrincipal Jwt jwt,
             @RequestParam(required = false) @Positive Long accountId,
             @RequestParam(defaultValue = "0") @Min(0) int page,
             @RequestParam(defaultValue = "20") @Min(1) @Max(100) int size) {
-        return PageResponse.from(transferService.listTransfers(accountId, PageRequest.of(page, size)),
+        return PageResponse.from(
+                transferService.listTransfers(CurrentUser.from(jwt), accountId, PageRequest.of(page, size)),
                 TransferResponse::from);
     }
 
     @GetMapping("/{transferId}")
-    public TransferResponse getTransfer(@PathVariable @Positive long transferId) {
-        return TransferResponse.from(transferService.getTransfer(transferId));
+    public TransferResponse getTransfer(@AuthenticationPrincipal Jwt jwt, @PathVariable @Positive long transferId) {
+        return TransferResponse.from(transferService.getTransfer(CurrentUser.from(jwt), transferId));
     }
 
     /**
