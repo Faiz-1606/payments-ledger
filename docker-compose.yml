@@ -1,0 +1,80 @@
+# The full stack: app + PostgreSQL + Kafka (transactional outbox and notification consumer on).
+#
+#   docker compose up --build
+#   open http://localhost:8080/demo.html          (race demo; the "demo" profile is on by default)
+#   open http://localhost:8080/swagger-ui.html
+#
+# Host ports are configurable in case 8080/5432 are taken on your machine:
+#   LEDGER_HTTP_PORT=18080 LEDGER_DB_PORT=15432 docker compose up --build
+# Without Kafka: docker compose -f docker-compose.core.yml up --build
+name: payments-ledger
+
+services:
+  postgres:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_DB: ledger
+      POSTGRES_USER: ledger
+      POSTGRES_PASSWORD: ledger
+    ports:
+      - "${LEDGER_DB_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ledger -d ledger"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  # Single-node Kafka in KRaft mode (no ZooKeeper): this one process is both broker and controller.
+  kafka:
+    image: apache/kafka:4.4.0
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 > /dev/null 2>&1"]
+      interval: 5s
+      timeout: 10s
+      retries: 30
+      start_period: 10s
+
+  app:
+    build: .
+    image: payments-ledger:local
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    environment:
+      SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-demo}
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/ledger
+      SPRING_DATASOURCE_USERNAME: ledger
+      SPRING_DATASOURCE_PASSWORD: ledger
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      # Local-only values. Real deployments inject secrets from their platform (docs/DEPLOY.md).
+      JWT_SECRET: local-compose-secret-not-for-production-0123456789
+      ADMIN_EMAIL: admin@ledger.local
+      ADMIN_PASSWORD: admin-password-local
+      LEDGER_LOCKING: ${LEDGER_LOCKING:-pessimistic}
+    ports:
+      - "${LEDGER_HTTP_PORT:-8080}:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8080/actuator/health/readiness || exit 1"]
+      interval: 3s
+      timeout: 3s
+      retries: 40
+      start_period: 10s
+
+volumes:
+  pgdata:

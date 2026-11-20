@@ -1,0 +1,47 @@
+# Render Blueprint: one web service (this repo's Dockerfile) + one managed PostgreSQL.
+# See docs/DEPLOY.md. Profiles "core,demo": no Kafka, race demo enabled.
+services:
+  - type: web
+    name: payments-ledger
+    runtime: docker
+    plan: free
+    healthCheckPath: /actuator/health/readiness
+    envVars:
+      - key: SPRING_PROFILES_ACTIVE
+        value: core,demo
+      - key: LEDGER_LOCKING
+        value: pessimistic
+      - key: JWT_SECRET
+        generateValue: true          # Render generates a random secret once
+      - key: ADMIN_EMAIL
+        sync: false                  # you are prompted for it on first deploy
+      - key: ADMIN_PASSWORD
+        sync: false
+      - key: JAVA_OPTS
+        value: "-XX:MaxRAMPercentage=75 -XX:+ExitOnOutOfMemoryError -XX:+UseSerialGC"
+      - key: DB_HOST
+        fromDatabase:
+          name: ledger-db
+          property: host
+      - key: DB_PORT
+        fromDatabase:
+          name: ledger-db
+          property: port
+      - key: DB_NAME
+        fromDatabase:
+          name: ledger-db
+          property: database
+      - key: DB_USER
+        fromDatabase:
+          name: ledger-db
+          property: user
+      - key: DB_PASSWORD
+        fromDatabase:
+          name: ledger-db
+          property: password
+
+databases:
+  - name: ledger-db
+    plan: free
+    databaseName: ledger
+    user: ledger
