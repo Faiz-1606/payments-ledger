@@ -78,7 +78,13 @@ class AuthApiTest extends AbstractIntegrationTest {
                         {"email": "nobody@example.com", "password": "whatever-123"}""")
                 .andExpect(status().isUnauthorized())
                 .andReturn().getResponse().getContentAsString();
-        assertThat(unknownEmail).as("no user enumeration via the error body").isEqualTo(wrongPassword);
+        assertThat(withoutRequestId(unknownEmail)).as("no user enumeration via the error body")
+                .isEqualTo(withoutRequestId(wrongPassword));
+    }
+
+    /** Every response has its own requestId; everything else must be identical. */
+    private static String withoutRequestId(String json) {
+        return json.replaceAll("\"requestId\":\"[^\"]*\"", "");
     }
 
     @Test

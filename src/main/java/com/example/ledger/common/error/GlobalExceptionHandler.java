@@ -35,14 +35,16 @@ import org.springframework.web.context.request.WebRequest;
 import org.springframework.web.method.annotation.HandlerMethodValidationException;
 import org.springframework.web.servlet.mvc.method.annotation.ResponseEntityExceptionHandler;
 
+import com.example.ledger.observability.RequestIdFilter;
+
 /**
  * Turns exceptions into RFC 7807 "problem details" JSON responses.
  *
- * <p>{@code @RestControllerAdvice} applies these handlers to every controller.
- * Extending {@link ResponseEntityExceptionHandler} gives us ready-made handling for
- * Spring MVC's own exceptions (malformed JSON, missing header, unsupported method...),
- * which also produce {@link ProblemDetail} bodies. Every response gets a stable
- * {@code code} property that clients can switch on.
+ * <p>{@code @RestControllerAdvice} applies these handlers to every controller (and, through
+ * {@code ProblemDetailsSecurityHandlers}, to security failures too). Extending
+ * {@link ResponseEntityExceptionHandler} gives ready-made handling for Spring MVC's own
+ * exceptions (malformed JSON, missing header, unsupported method...). Every body carries a stable
+ * {@code code} that clients can switch on, and the {@code requestId} that appears in the logs.
  *
  * <p>Example body:
  * <pre>
@@ -52,7 +54,8 @@ import org.springframework.web.servlet.mvc.method.annotation.ResponseEntityExcep
  *   "status": 422,
  *   "detail": "Account 7 has 500 paise, cannot debit 900 paise",
  *   "instance": "/api/transfers",
- *   "code": "INSUFFICIENT_FUNDS"
+ *   "code": "INSUFFICIENT_FUNDS",
+ *   "requestId": "1f0c6e3a-..."
  * }
  * </pre>
  */
@@ -64,27 +67,7 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
     /** All of our deliberate business errors. */
     @ExceptionHandler(ApiException.class)
     public ResponseEntity<ProblemDetail> handleApiException(ApiException ex) {
-        ProblemDetail problem = ProblemDetail.forStatusAndDetail(ex.status(), ex.getMessage());
-        problem.setType(problemType(ex.code()));
-        problem.setTitle(ex.title());
-        problem.setProperty("code", ex.code());
-        return ResponseEntity.status(ex.status()).body(problem);
-    }
-
-    /**
-     * A database constraint fired that the code did not check for first (or lost a race
-     * on, e.g. two sign-ups with the same email at the same moment). The constraint kept
-     * the data correct; we report a conflict instead of a 500.
-     */
-    @ExceptionHandler(DataIntegrityViolationException.class)
-    public ResponseEntity<ProblemDetail> handleConstraintViolation(DataIntegrityViolationException ex) {
-        log.warn("Database constraint violation: {}", ex.getMostSpecificCause().getMessage());
-        ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.CONFLICT,
-                "The request conflicts with existing data.");
-        problem.setType(problemType("DATA_CONFLICT"));
-        problem.setTitle("Data conflict");
-        problem.setProperty("code", "DATA_CONFLICT");
-        return ResponseEntity.status(HttpStatus.CONFLICT).body(problem);
+        return problem(ex.status(), ex.code(), ex.title(), ex.getMessage());
     }
 
     /**
@@ -96,22 +79,14 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
         String detail = ex instanceof OAuth2AuthenticationException
                 ? "The access token is invalid or expired."
                 : "Authentication is required: send Authorization: Bearer <token>.";
-        ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.UNAUTHORIZED, detail);
-        problem.setType(problemType("UNAUTHORIZED"));
-        problem.setTitle("Unauthorized");
-        problem.setProperty("code", "UNAUTHORIZED");
-        return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(problem);
+        return problem(HttpStatus.UNAUTHORIZED, "UNAUTHORIZED", "Unauthorized", detail);
     }
 
     /** Authenticated, but the role is not enough (e.g. a USER calling an ADMIN endpoint). */
     @ExceptionHandler(AccessDeniedException.class)
     public ResponseEntity<ProblemDetail> handleAccessDenied(AccessDeniedException ex) {
-        ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.FORBIDDEN,
+        return problem(HttpStatus.FORBIDDEN, "FORBIDDEN", "Forbidden",
                 "You do not have permission to perform this operation.");
-        problem.setType(problemType("FORBIDDEN"));
-        problem.setTitle("Forbidden");
-        problem.setProperty("code", "FORBIDDEN");
-        return ResponseEntity.status(HttpStatus.FORBIDDEN).body(problem);
     }
 
     /**
@@ -121,24 +96,28 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
     @ExceptionHandler(ConcurrencyFailureException.class)
     public ResponseEntity<ProblemDetail> handleConcurrencyFailure(ConcurrencyFailureException ex) {
         log.warn("Concurrency failure: {}", ex.getMostSpecificCause().getMessage());
-        ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.CONFLICT,
+        return problem(HttpStatus.CONFLICT, "CONCURRENT_UPDATE", "Concurrent update",
                 "The request collided with a concurrent update. Retry with the same Idempotency-Key.");
-        problem.setType(problemType("CONCURRENT_UPDATE"));
-        problem.setTitle("Concurrent update");
-        problem.setProperty("code", "CONCURRENT_UPDATE");
-        return ResponseEntity.status(HttpStatus.CONFLICT).body(problem);
+    }
+
+    /**
+     * A database constraint fired that the code did not check for first (or lost a race
+     * on, e.g. two sign-ups with the same email at the same moment). The constraint kept
+     * the data correct; we report a conflict instead of a 500.
+     */
+    @ExceptionHandler(DataIntegrityViolationException.class)
+    public ResponseEntity<ProblemDetail> handleConstraintViolation(DataIntegrityViolationException ex) {
+        log.warn("Database constraint violation: {}", ex.getMostSpecificCause().getMessage());
+        return problem(HttpStatus.CONFLICT, "DATA_CONFLICT", "Data conflict",
+                "The request conflicts with existing data.");
     }
 
     /** Anything unexpected: log it with the stack trace, but never leak internals to the client. */
     @ExceptionHandler(Exception.class)
     public ResponseEntity<ProblemDetail> handleUnexpected(Exception ex) {
         log.error("Unhandled exception", ex);
-        ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.INTERNAL_SERVER_ERROR,
+        return problem(HttpStatus.INTERNAL_SERVER_ERROR, "INTERNAL_ERROR", "Internal error",
                 "An unexpected error occurred.");
-        problem.setType(problemType("INTERNAL_ERROR"));
-        problem.setTitle("Internal error");
-        problem.setProperty("code", "INTERNAL_ERROR");
-        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(problem);
     }
 
     /**
@@ -179,7 +158,7 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
     /**
      * Every other Spring MVC exception (missing header, malformed JSON, wrong HTTP method...)
      * passes through here. The base class passes {@code body == null} and fills it in later,
-     * so we resolve the ProblemDetail ourselves and add a {@code code}.
+     * so we resolve the ProblemDetail ourselves and add {@code code} and {@code requestId}.
      */
     @Override
     protected ResponseEntity<Object> handleExceptionInternal(Exception ex, Object body, HttpHeaders headers,
@@ -187,11 +166,22 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
         if (body == null && ex instanceof ErrorResponse errorResponse) {
             body = errorResponse.updateAndGetBody(getMessageSource(), LocaleContextHolder.getLocale());
         }
-        if (body instanceof ProblemDetail problem
-                && (problem.getProperties() == null || !problem.getProperties().containsKey("code"))) {
-            problem.setProperty("code", codeFor(ex, statusCode));
+        if (body instanceof ProblemDetail problem) {
+            if (problem.getProperties() == null || !problem.getProperties().containsKey("code")) {
+                problem.setProperty("code", codeFor(ex, statusCode));
+            }
+            addRequestId(problem);
         }
         return super.handleExceptionInternal(ex, body, headers, statusCode, request);
+    }
+
+    private static ResponseEntity<ProblemDetail> problem(HttpStatus status, String code, String title, String detail) {
+        ProblemDetail problem = ProblemDetail.forStatusAndDetail(status, detail);
+        problem.setType(problemType(code));
+        problem.setTitle(title);
+        problem.setProperty("code", code);
+        addRequestId(problem);
+        return ResponseEntity.status(status).body(problem);
     }
 
     private static ProblemDetail validationProblem(ProblemDetail problem, List<Map<String, String>> errors) {
@@ -200,7 +190,15 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
         problem.setDetail("One or more fields are invalid.");
         problem.setProperty("code", "VALIDATION_FAILED");
         problem.setProperty("errors", errors);
+        addRequestId(problem);
         return problem;
+    }
+
+    private static void addRequestId(ProblemDetail problem) {
+        String requestId = RequestIdFilter.currentRequestId();
+        if (requestId != null) {
+            problem.setProperty("requestId", requestId);
+        }
     }
 
     private static String codeFor(Exception ex, HttpStatusCode statusCode) {

@@ -19,6 +19,11 @@ public class NotFoundException extends ApiException {
                 "User " + userId + " does not exist");
     }
 
+    public static NotFoundException reconciliationReport() {
+        return new NotFoundException("NO_RECONCILIATION_REPORT", "No reconciliation report",
+                "Reconciliation has not run yet; POST /api/admin/reconciliation/runs to run it now");
+    }
+
     public static NotFoundException transfer(long transferId) {
         return new NotFoundException("TRANSFER_NOT_FOUND", "Transfer not found",
                 "Transfer " + transferId + " does not exist");

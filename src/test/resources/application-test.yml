@@ -7,9 +7,13 @@ ledger:
     bcrypt-strength: 4
     admin-email: admin@ledger.test
     admin-password: admin-password-for-tests
+  reconciliation:
+    # Tests trigger reconciliation explicitly (ReconciliationJobTest turns the schedule on).
+    enabled: false
 
 logging:
   level:
     root: WARN
     com.example.ledger: INFO
+    com.example.ledger.access: WARN
     org.testcontainers: INFO

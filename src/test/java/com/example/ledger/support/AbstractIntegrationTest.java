@@ -2,6 +2,7 @@ package com.example.ledger.support;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.micrometer.metrics.test.autoconfigure.AutoConfigureMetrics;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -31,6 +32,7 @@ import com.example.ledger.user.UserRepository;
  */
 @SpringBootTest
 @AutoConfigureMockMvc
+@AutoConfigureMetrics // tests disable metrics export by default; we test /actuator/prometheus
 @ActiveProfiles("test")
 public abstract class AbstractIntegrationTest {
 

@@ -62,6 +62,31 @@ ledger:
     admin-email: ${ADMIN_EMAIL:}
     admin-password: ${ADMIN_PASSWORD:}
 
+  reconciliation:
+    # Scheduled check of invariants 1-4 across all accounts (ReconciliationJob).
+    enabled: true
+    interval: PT5M
+    initial-delay: PT30S
+
+management:
+  endpoints:
+    web:
+      exposure:
+        # /actuator/health and /info are public; metrics and prometheus need ADMIN (SecurityConfig).
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      show-details: when-authorized
+      roles: ADMIN
+      probes:
+        # /actuator/health/liveness and /readiness for container orchestrators.
+        enabled: true
+
+logging:
+  pattern:
+    # Prints the request id (set by RequestIdFilter in the MDC) on every log line.
+    correlation: "[%X{requestId:-}] "
+
 springdoc:
   swagger-ui:
     path: /swagger-ui.html

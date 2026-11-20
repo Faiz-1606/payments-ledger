@@ -4,6 +4,7 @@ import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
 
+import io.micrometer.core.instrument.Timer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.OptimisticLockingFailureException;
@@ -72,13 +73,14 @@ public class TransferService {
     private final IdempotencyService idempotencyService;
     private final LockingStrategies lockingStrategies;
     private final RetryBackoff retryBackoff;
+    private final TransferMetrics metrics;
     private final TransactionTemplate transactionTemplate;
 
     public TransferService(TransferRepository transferRepository, AccountRepository accountRepository,
                            AccessPolicy accessPolicy, LedgerWriter ledgerWriter,
                            SystemAccounts systemAccounts, IdempotencyService idempotencyService,
                            LockingStrategies lockingStrategies, RetryBackoff retryBackoff,
-                           PlatformTransactionManager transactionManager) {
+                           TransferMetrics metrics, PlatformTransactionManager transactionManager) {
         this.transferRepository = transferRepository;
         this.accountRepository = accountRepository;
         this.accessPolicy = accessPolicy;
@@ -87,6 +89,7 @@ public class TransferService {
         this.idempotencyService = idempotencyService;
         this.lockingStrategies = lockingStrategies;
         this.retryBackoff = retryBackoff;
+        this.metrics = metrics;
         this.transactionTemplate = new TransactionTemplate(transactionManager);
         this.transactionTemplate.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRED);
         this.transactionTemplate.setIsolationLevel(TransactionDefinition.ISOLATION_READ_COMMITTED);
@@ -121,6 +124,7 @@ public class TransferService {
         return execute(null, idempotencyKey, command, mode);
     }
 
+    /** Records metrics around {@link #executeWithRetries}: one count and one latency per request. */
     private TransferOutcome execute(Long initiatedBy, String idempotencyKey, TransferCommand command,
                                     LockingMode mode) {
         if (TransactionSynchronizationManager.isActualTransactionActive()) {
@@ -128,6 +132,19 @@ public class TransferService {
             // that outer transaction is already marked rollback-only.
             throw new IllegalStateException("TransferService must not be called inside an existing transaction");
         }
+        Timer.Sample timer = metrics.startTimer();
+        try {
+            TransferOutcome outcome = executeWithRetries(initiatedBy, idempotencyKey, command, mode);
+            metrics.finished(timer, command.type(), mode, outcome.replayed() ? "replayed" : "completed");
+            return outcome;
+        } catch (RuntimeException e) {
+            metrics.finished(timer, command.type(), mode, TransferMetrics.outcomeOf(e));
+            throw e;
+        }
+    }
+
+    private TransferOutcome executeWithRetries(Long initiatedBy, String idempotencyKey, TransferCommand command,
+                                               LockingMode mode) {
         if (command.fromAccountId() == command.toAccountId()) {
             throw InvalidTransferException.sameAccount(command.fromAccountId());
         }
@@ -155,6 +172,7 @@ public class TransferService {
                             + command.fromAccountId() + " or " + command.toAccountId());
                 }
                 log.debug("Optimistic lock conflict on attempt {} for {}, retrying", attempt, command);
+                metrics.lockRetry(mode);
                 retryBackoff.pauseAfter(attempt);
             }
         }
@@ -178,6 +196,8 @@ public class TransferService {
                 command.fromAccountId(), command.toAccountId(), command.amountPaise(), now));
         ledgerWriter.recordDoubleEntry(transfer.getId(), command.fromAccountId(), command.toAccountId(),
                 command.amountPaise(), now);
+        log.debug("Transfer {} {}: {} -> {} ({} paise)", transfer.getId(), command.type(),
+                command.fromAccountId(), command.toAccountId(), command.amountPaise());
         return TransferResponse.from(transfer);
     }
 
