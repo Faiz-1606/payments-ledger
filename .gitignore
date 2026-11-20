@@ -34,4 +34,4 @@ build/
 
 ### Local tooling ###
 .claude/settings.local.json
-loadtest/results/*.json
+loadtest/results/trial/

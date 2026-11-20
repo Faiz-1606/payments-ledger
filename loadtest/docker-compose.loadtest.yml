@@ -1,0 +1,13 @@
+# Overrides docker-compose.core.yml for load tests (run_all.py passes both files).
+# Fixed CPU/memory limits make runs comparable; the load generator (k6) runs in its own
+# container on the same machine and uses the remaining CPUs.
+services:
+  postgres:
+    cpus: 4
+    mem_limit: 2g
+  app:
+    cpus: 4
+    mem_limit: 2g
+    environment:
+      # One access-log line per request would mostly measure stdout throughput; turn it off.
+      LOGGING_LEVEL_COM_EXAMPLE_LEDGER_ACCESS: WARN
