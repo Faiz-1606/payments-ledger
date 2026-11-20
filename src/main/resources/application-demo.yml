@@ -1,0 +1,9 @@
+# The "demo" profile: adds /api/demo/** and the race page at /demo.html.
+# Combine with "core" for a Kafka-free deployment: SPRING_PROFILES_ACTIVE=core,demo
+ledger:
+  demo:
+    accounts: 4
+    opening-balance-paise: 100000   # ₹1,000 per demo wallet
+    max-transfers: 2000
+    threads: 16
+    max-amount-paise: 5000          # each transfer moves ₹0.01 to ₹50

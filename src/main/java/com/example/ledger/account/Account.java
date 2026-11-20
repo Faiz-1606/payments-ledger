@@ -76,6 +76,11 @@ public class Account {
         return new Account(ownerId, AccountKind.USER, "INR");
     }
 
+    /** A new, empty wallet for the race demo, owned by the demo user. */
+    public static Account openDemoWallet(long demoOwnerId) {
+        return new Account(demoOwnerId, AccountKind.DEMO, "INR");
+    }
+
     /**
      * Takes money out. Throws {@link InsufficientFundsException} if a non-funding account
      * would go negative. {@code Math.subtractExact} throws on overflow instead of silently

@@ -25,7 +25,8 @@ public class UserService {
      * users.email is what really guarantees uniqueness; we translate its violation into the
      * same 409. {@code saveAndFlush} forces the INSERT now so the violation surfaces here.
      *
-     * @param passwordHash an already-hashed password (hashing is the security layer's job)
+     * @param passwordHash an already-hashed password (hashing is the security layer's job), or
+     *                     null for a user who can never log in (the race demo's account owner)
      */
     @Transactional
     public User createUser(String fullName, String email, String passwordHash, Role role) {

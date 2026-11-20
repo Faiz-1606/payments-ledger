@@ -249,12 +249,23 @@ public class TransferService {
         return transfer;
     }
 
+    /**
+     * Which kinds of account may exchange money: USER -> USER and DEMO -> DEMO transfers, and
+     * deposits from FUNDING into USER or DEMO. Keeping DEMO separate means the race demo (which can
+     * run the broken naive mode) can never touch a real wallet.
+     */
     private static void checkEligibility(TransferCommand command, Account from, Account to) {
-        if (to.getKind() != AccountKind.USER) {
+        if (to.getKind() == AccountKind.FUNDING) {
             throw InvalidTransferException.notEligible(to.getId(), "is a system account and cannot receive money");
         }
-        if (command.type() == TransferType.TRANSFER && from.getKind() != AccountKind.USER) {
-            throw InvalidTransferException.notEligible(from.getId(), "is a system account and cannot send transfers");
+        if (command.type() == TransferType.TRANSFER) {
+            if (from.getKind() == AccountKind.FUNDING) {
+                throw InvalidTransferException.notEligible(from.getId(), "is a system account and cannot send transfers");
+            }
+            if (from.getKind() != to.getKind()) {
+                throw InvalidTransferException.notEligible(to.getId(),
+                        "is a " + to.getKind() + " account; transfers must stay within one kind of account");
+            }
         }
         if (!from.getCurrency().equals(to.getCurrency())) {
             throw InvalidTransferException.currencyMismatch(from.getId(), to.getId());

@@ -1,0 +1,243 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ledger Race Demo</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --panel: #ffffff; --text: #16181d; --muted: #5d6470; --border: #dfe3e8;
+    --accent: #2f5bd3; --accent-text: #ffffff; --good: #137a3a; --good-bg: #e7f6ec;
+    --bad: #b42318; --bad-bg: #fdecea; --warn: #8a5a00; --code: #eef1f5;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f1115; --panel: #171a21; --text: #e8eaee; --muted: #9aa3b2; --border: #2a2f3a;
+      --accent: #6b8cff; --accent-text: #0f1115; --good: #5ad08a; --good-bg: #12291c;
+      --bad: #ff7b72; --bad-bg: #2d1514; --warn: #e3b341; --code: #222733;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 980px; margin: 0 auto; padding: 24px 16px 64px; }
+  h1 { font-size: 26px; margin: 0 0 6px; letter-spacing: -0.01em; }
+  h2 { font-size: 16px; margin: 0 0 12px; }
+  p.lead { color: var(--muted); margin: 0 0 20px; max-width: 70ch; }
+  code { background: var(--code); padding: 1px 5px; border-radius: 4px; font-size: 13px; }
+  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 16px; margin-bottom: 16px; }
+  .modes { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 14px; }
+  .mode { border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; cursor: pointer; background: transparent;
+          color: inherit; text-align: left; font: inherit; }
+  .mode strong { display: block; font-size: 15px; }
+  .mode span { color: var(--muted); font-size: 13px; }
+  .mode[aria-pressed="true"] { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+  .controls { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+  label { color: var(--muted); font-size: 14px; }
+  input[type=number] { width: 100px; padding: 8px; border: 1px solid var(--border); border-radius: 6px;
+                       background: var(--bg); color: var(--text); font: inherit; }
+  button.primary, button.secondary { padding: 9px 16px; border-radius: 6px; font: inherit; cursor: pointer; border: 1px solid var(--accent); }
+  button.primary { background: var(--accent); color: var(--accent-text); font-weight: 600; }
+  button.secondary { background: transparent; color: var(--accent); }
+  button:disabled { opacity: 0.55; cursor: wait; }
+  .cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+  .card { border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; }
+  .card .label { color: var(--muted); font-size: 13px; }
+  .card .value { font-size: 20px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+  th, td { text-align: right; padding: 7px 8px; border-bottom: 1px solid var(--border); }
+  th:first-child, td:first-child { text-align: left; }
+  th { color: var(--muted); font-weight: 500; font-size: 13px; }
+  .drift { color: var(--bad); font-weight: 600; }
+  .ok { color: var(--good); }
+  .verdict { border-radius: 8px; padding: 12px 14px; margin-bottom: 14px; font-weight: 500; }
+  .verdict.good { background: var(--good-bg); color: var(--good); }
+  .verdict.bad { background: var(--bad-bg); color: var(--bad); }
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 8px; margin-bottom: 14px; }
+  .stat { font-size: 13px; color: var(--muted); }
+  .stat b { display: block; color: var(--text); font-size: 17px; font-variant-numeric: tabular-nums; }
+  .error { color: var(--bad); }
+  .history li { margin-bottom: 4px; }
+  .split { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 720px) {
+    .modes, .cards, .split { grid-template-columns: 1fr; }
+    th, td { padding: 6px 4px; font-size: 13px; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <h1>Race demo</h1>
+  <p class="lead">
+    Four demo wallets. Press <b>Run race</b> and the server fires N transfers between them
+    <b>at the same time</b> (16 threads), using the locking strategy you pick. Transfers only move
+    money <em>between</em> these wallets, so their total must never change, and each wallet's stored
+    balance must equal the sum of its ledger entries.
+  </p>
+
+  <section class="panel">
+    <h2>1. Pick a strategy</h2>
+    <div class="modes" role="group" aria-label="Locking strategy">
+      <button class="mode" data-mode="NAIVE" aria-pressed="false">
+        <strong>naive</strong><span>Read, compute, overwrite. No locks. Expect lost updates.</span>
+      </button>
+      <button class="mode" data-mode="PESSIMISTIC" aria-pressed="true">
+        <strong>pessimistic</strong><span>SELECT … FOR UPDATE in id order. Transfers wait their turn.</span>
+      </button>
+      <button class="mode" data-mode="OPTIMISTIC" aria-pressed="false">
+        <strong>optimistic</strong><span>@Version check, retry on conflict. Some may give up (409).</span>
+      </button>
+    </div>
+    <div class="controls">
+      <label for="n">Transfers (N)</label>
+      <input id="n" type="number" min="1" max="2000" value="300">
+      <button id="run" class="primary">Run race</button>
+      <button id="reset" class="secondary">Reset wallets</button>
+      <span id="status" class="stat"></span>
+    </div>
+  </section>
+
+  <section class="panel" id="result-panel" hidden>
+    <h2>2. What happened</h2>
+    <div id="verdict" class="verdict"></div>
+    <div class="stats" id="stats"></div>
+    <div class="split">
+      <div><h2>Before</h2><div id="before"></div></div>
+      <div><h2>After</h2><div id="after"></div></div>
+    </div>
+  </section>
+
+  <section class="panel">
+    <h2>Demo wallets now</h2>
+    <div class="cards" id="cards"></div>
+    <div id="current" style="margin-top:12px"></div>
+  </section>
+
+  <section class="panel">
+    <h2>Runs on this page</h2>
+    <ol class="history" id="history"><li class="stat">None yet.</li></ol>
+    <p class="stat">
+      Why the <b>ledger sum</b> stays ₹0.00 even in naive mode: every transfer still writes its two
+      ledger entries (−amount, +amount). What naive mode breaks is the <em>stored balance</em>
+      (<code>balance = old value − amount</code> computed from a stale read, overwriting a concurrent
+      update), so balances drift away from the ledger. That is exactly what the reconciliation job detects.
+      API docs: <a href="/swagger-ui.html">Swagger UI</a>.
+    </p>
+  </section>
+</main>
+<script>
+  const inr = new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR' });
+  const money = (paise) => inr.format(paise / 100);
+  const signed = (paise) => (paise > 0 ? '+' : '') + money(paise);
+  const $ = (id) => document.getElementById(id);
+  let mode = 'PESSIMISTIC';
+  let runCount = 0;
+
+  document.querySelectorAll('.mode').forEach((button) => {
+    button.addEventListener('click', () => {
+      mode = button.dataset.mode;
+      document.querySelectorAll('.mode').forEach((b) => b.setAttribute('aria-pressed', String(b === button)));
+    });
+  });
+
+  async function call(method, path, body) {
+    const response = await fetch(path, {
+      method,
+      headers: body ? { 'Content-Type': 'application/json' } : {},
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    const data = await response.json().catch(() => null);
+    if (!response.ok) {
+      if (response.status === 404) {
+        throw new Error('Demo endpoints are not enabled. Start the app with SPRING_PROFILES_ACTIVE=core,demo.');
+      }
+      throw new Error((data && (data.detail || data.title)) || `HTTP ${response.status}`);
+    }
+    return data;
+  }
+
+  function accountsTable(state) {
+    const rows = state.accounts.map((a) => `
+      <tr><td>#${a.id}</td><td>${money(a.storedBalancePaise)}</td><td>${money(a.ledgerBalancePaise)}</td>
+      <td class="${a.driftPaise === 0 ? 'ok' : 'drift'}">${a.driftPaise === 0 ? '0' : signed(a.driftPaise)}</td></tr>`).join('');
+    return `<table><thead><tr><th>Wallet</th><th>Stored</th><th>Ledger</th><th>Drift</th></tr></thead>
+      <tbody>${rows}</tbody>
+      <tfoot><tr><th>Total</th><th>${money(state.totalStoredPaise)}</th><th>${money(state.totalLedgerPaise)}</th>
+      <th class="${state.totalDriftPaise === 0 ? 'ok' : 'drift'}">${state.totalDriftPaise === 0 ? '0' : signed(state.totalDriftPaise)}</th></tr></tfoot></table>`;
+  }
+
+  function renderState(state) {
+    $('cards').innerHTML = `
+      <div class="card"><div class="label">Total stored balance</div><div class="value">${money(state.totalStoredPaise)}</div></div>
+      <div class="card"><div class="label">Total per ledger</div><div class="value">${money(state.totalLedgerPaise)}</div></div>
+      <div class="card"><div class="label">Ledger sum, all accounts (must be ₹0)</div>
+        <div class="value ${state.ledgerSumPaise === 0 ? 'ok' : 'drift'}">${money(state.ledgerSumPaise)}</div></div>`;
+    $('current').innerHTML = accountsTable(state);
+  }
+
+  function renderResult(r) {
+    // Judge THIS race by what it changed: wallets may already carry drift from an earlier naive run.
+    const newDrift = r.after.totalDriftPaise - r.before.totalDriftPaise;
+    const broken = r.moneyCreatedPaise !== 0 || newDrift !== 0;
+    const inheritedDrift = r.before.totalDriftPaise !== 0;
+    const verdict = $('verdict');
+    verdict.className = 'verdict ' + (broken ? 'bad' : 'good');
+    verdict.textContent = broken
+      ? `Broken: the wallets' total changed by ${signed(r.moneyCreatedPaise)} and stored balances drifted a further ${signed(newDrift)} from the ledger. Concurrent transfers overwrote each other (lost updates).`
+      : `Correct: ${money(r.before.totalStoredPaise)} before and ${money(r.after.totalStoredPaise)} after, and this race added no drift.`
+        + (inheritedDrift ? ` (The ${signed(r.before.totalDriftPaise)} drift was already there from an earlier naive run; press Reset wallets for a clean set.)` : '');
+    const perSecond = r.durationMillis > 0 ? Math.round((r.succeeded * 1000) / r.durationMillis) : r.succeeded;
+    $('stats').innerHTML = [
+      ['Strategy', r.mode.toLowerCase()],
+      ['Succeeded', `${r.succeeded} / ${r.requested}`],
+      ['Insufficient funds', r.insufficientFunds],
+      ['Gave up (409)', r.gaveUp],
+      ['Optimistic retries', r.optimisticRetries],
+      ['Other errors', r.otherErrors],
+      ['Duration', `${r.durationMillis} ms`],
+      ['Throughput', `${perSecond} transfers/s`],
+    ].map(([label, value]) => `<div class="stat">${label}<b>${value}</b></div>`).join('');
+    $('before').innerHTML = accountsTable(r.before);
+    $('after').innerHTML = accountsTable(r.after);
+    $('result-panel').hidden = false;
+
+    runCount += 1;
+    if (runCount === 1) $('history').innerHTML = '';
+    const item = document.createElement('li');
+    item.innerHTML = `<b>${r.mode.toLowerCase()}</b>, N=${r.requested}: ${broken
+      ? `<span class="drift">total ${signed(r.moneyCreatedPaise)}, new drift ${signed(newDrift)}</span>`
+      : '<span class="ok">money conserved, no drift</span>'} (${r.durationMillis} ms)`;
+    $('history').prepend(item);
+  }
+
+  async function withBusy(label, action) {
+    $('run').disabled = true; $('reset').disabled = true;
+    $('status').textContent = label;
+    $('status').classList.remove('error');
+    try {
+      await action();
+      $('status').textContent = '';
+    } catch (e) {
+      $('status').textContent = e.message;
+      $('status').classList.add('error');
+    } finally {
+      $('run').disabled = false; $('reset').disabled = false;
+    }
+  }
+
+  $('run').addEventListener('click', () => withBusy('Racing…', async () => {
+    const n = Math.max(1, Math.min(2000, Number($('n').value) || 300));
+    const result = await call('POST', '/api/demo/race', { mode, transfers: n });
+    renderResult(result);
+    renderState(result.after);
+  }));
+
+  $('reset').addEventListener('click', () => withBusy('Creating fresh wallets…', async () => {
+    renderState(await call('POST', '/api/demo/reset'));
+    $('result-panel').hidden = true;
+  }));
+
+  withBusy('Loading…', async () => renderState(await call('GET', '/api/demo/state')));
+</script>
+</body>
+</html>

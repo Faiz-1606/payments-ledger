@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Payments Ledger</title>
+<style>
+  :root { --bg: #f6f7f9; --text: #16181d; --muted: #5d6470; --accent: #2f5bd3; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #0f1115; --text: #e8eaee; --muted: #9aa3b2; --accent: #6b8cff; } }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.6 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 640px; margin: 0 auto; padding: 48px 16px; }
+  h1 { margin: 0 0 8px; }
+  p { color: var(--muted); }
+  a { color: var(--accent); }
+  li { margin-bottom: 6px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Payments Ledger</h1>
+  <p>INR wallets with a double-entry ledger, built to stay correct under concurrency and retries.</p>
+  <ul>
+    <li><a href="/demo.html">Race demo</a>: watch naive locking lose money, and the other two strategies not (needs the <code>demo</code> profile)</li>
+    <li><a href="/swagger-ui.html">API documentation (Swagger UI)</a></li>
+    <li><a href="/actuator/health">Health</a></li>
+  </ul>
+</main>
+</body>
+</html>
