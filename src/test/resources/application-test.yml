@@ -1,0 +1,7 @@
+# Settings for the "test" profile, layered on top of src/main/resources/application.yml.
+# The datasource URL is supplied at runtime by AbstractIntegrationTest (Testcontainers).
+logging:
+  level:
+    root: WARN
+    com.example.ledger: INFO
+    org.testcontainers: INFO
