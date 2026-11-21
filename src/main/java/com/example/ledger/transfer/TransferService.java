@@ -59,8 +59,10 @@ import com.example.ledger.transfer.locking.RetryBackoff;
  * <p><b>Isolation: READ COMMITTED</b> (PostgreSQL's default, set explicitly so it is visible).
  * Each statement sees data committed before it started. That alone does not prevent lost
  * updates, so the strategies add protection: row locks (pessimistic) or a version check
- * (optimistic). The naive strategy has neither, which is why it loses updates. See
- * docs/LEARNING.md, Phase 3, for why not REPEATABLE READ or SERIALIZABLE.
+ * (optimistic). The naive strategy has neither, which is why it loses updates.
+ * REPEATABLE READ would turn naive's lost updates into serialization errors (correct but
+ * failing, which hides the lesson), and SERIALIZABLE adds predicate tracking and retry storms
+ * for no extra benefit: the strategies keep the protection explicit in code.
  */
 @Service
 public class TransferService {

@@ -15,9 +15,9 @@ with tests, load tests and a live race demo.
 - Transactional outbox to Kafka with an idempotent consumer. Kafka is optional (`core` profile).
 - k6 load tests across all strategies, with results checked for drift and duplicates.
 
-**Learning guide:** this repository is written to be read. Start with
-[docs/LEARNING.md](docs/LEARNING.md) (one section per phase: files to read, concepts, design
-trade-offs, interview questions). Decisions are logged in [docs/DECISIONS.md](docs/DECISIONS.md).
+**Reading the code:** the classes are commented to explain *why*, not just *what*. A good order:
+`TransferService` → `transfer/locking/` → `IdempotencyService` → `SecurityConfig` →
+`ReconciliationService` → `outbox/`.
 
 ## Architecture
 
@@ -142,11 +142,14 @@ Errors are RFC 7807 problem details with a stable `code` and the `requestId` fro
 
 ## Load-test results
 
-From [loadtest/RESULTS.md](loadtest/RESULTS.md) (produced by `python loadtest/run_all.py`; machine
-specs and interpretation are there). Each row is a fresh stack; the last two columns must be 0.
+Produced by `python loadtest/run_all.py`; raw k6 summaries and every derived number are in
+`loadtest/results/`. Each row is a fresh stack; the last two columns must be 0.
 
-Run started 2026-11-20 15:21 UTC, git commit `9710687`, 60s per scenario.
+Run started 2026-11-20 15:21 UTC, git commit `dd0c856`, 60s per scenario.
 - **Host:** AMD Ryzen 7 5800H with Radeon Graphics, 16 logical CPUs, 15.4 GB RAM, Windows-11-10.0.26200-SP0
+- **Docker:** 29.9.3 (Docker Desktop), 16 CPUs / 7.5 GB available to containers
+- **Limits:** app: 4 CPUs / 2 GB, postgres: 4 CPUs / 2 GB, k6: unlimited (same machine)
+- **Load generator:** k6 v2.4.0 (commit/dd9395906d, go1.27.3, linux/amd64)
 
 | Mode | Scenario | VUs | Transfer req/s | OK transfers/s | p50 ms | p95 ms | p99 ms | Transfer error rate | 409 | 5xx | Optimistic retries | Drifted accounts | Abs. drift (₹) | Ledger sum | DB rows − OK transfers | Duplicate ids seen |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
@@ -191,8 +194,8 @@ src/main/java/com/example/ledger/
   notification/    idempotent Kafka consumer
   demo/            race demo (demo profile only)
 src/main/resources/db/migration/   Flyway V1..V5
-loadtest/          k6 scenarios, runner, RESULTS.md
-docs/              LEARNING.md, DECISIONS.md, PROGRESS.md, DEPLOY.md
+loadtest/          k6 scenarios, runner, raw k6 results
+docs/              DEPLOY.md
 ```
 
 ## Tech

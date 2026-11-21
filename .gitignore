@@ -35,3 +35,4 @@ build/
 ### Local tooling ###
 .claude/settings.local.json
 loadtest/results/trial/
+__pycache__/

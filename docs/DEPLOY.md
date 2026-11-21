@@ -40,7 +40,7 @@ repository's `Dockerfile`.
    | `JWT_SECRET` | at least 32 random bytes, e.g. the output of `openssl rand -base64 48` |
    | `ADMIN_EMAIL` | your admin login |
    | `ADMIN_PASSWORD` | a strong password |
-   | `LEDGER_LOCKING` | `pessimistic` (default; see docs/DECISIONS.md D22) |
+   | `LEDGER_LOCKING` | `pessimistic` (default; safest under hot-account contention) |
    | `JAVA_OPTS` | `-XX:MaxRAMPercentage=75 -XX:+ExitOnOutOfMemoryError -XX:+UseSerialGC` |
 
    Render's database page also shows a `postgresql://user:pass@host/db` URL. Spring's JDBC
