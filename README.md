@@ -5,6 +5,10 @@ and a **double-entry ledger**, a simplified version of what a payments company r
 internally. The point of the project is **correctness under concurrency and retries**, proven
 with tests, load tests and a live race demo.
 
+**Live demo:** <https://payments-ledger-whxy.onrender.com/demo.html> · API docs:
+<https://payments-ledger-whxy.onrender.com/swagger-ui.html>
+(Render free tier: the first request after a quiet spell can be slow while the instance wakes up.)
+
 - Three interchangeable concurrency strategies (`naive` / `pessimistic` / `optimistic`). The
   naive one exists to show the lost-update bug; tests prove it breaks the ledger and the
   other two don't.
@@ -175,8 +179,9 @@ Run it locally with `docker compose up --build`, then open <http://localhost:808
 Pick a strategy and N, press **Run race**, and watch naive mode change the total amount of money
 while pessimistic and optimistic conserve it.
 
-To put it on the internet, follow [docs/DEPLOY.md](docs/DEPLOY.md) (Render, `core,demo`
-profiles, managed PostgreSQL). The demo is then at `https://<your-service>.onrender.com/demo.html`.
+It is deployed at <https://payments-ledger-whxy.onrender.com/demo.html> (Render, `core,demo`
+profiles, managed PostgreSQL; see [docs/DEPLOY.md](docs/DEPLOY.md) to deploy your own). On the
+free instance a race runs much slower than locally, so start with a small N.
 
 ## Project layout
 
